@@ -21,33 +21,32 @@ abstract type ExprAST end
 struct NumberExprAST <: ExprAST
     val::Float64
 end
-Base.show(io::IO, expr::NumberExprAST) = print(io, "Number[", expr.val, "]")
+Base.show(io::IO, expr::NumberExprAST) = print(io, expr.val)
 
 struct VariableExprAST <: ExprAST
     name::String
 end
-Base.show(io::IO, expr::VariableExprAST) = print(io, "Variable[", expr.name, "]")
+Base.show(io::IO, expr::VariableExprAST) = print(io, expr.name)
 
 struct BinaryExprAST <: ExprAST
     op::String
     lhs::ExprAST
     rhs::ExprAST
 end
-Base.show(io::IO, expr::BinaryExprAST) = print(io, "BinOp[(", expr.lhs, ")", expr.op, "(", expr.rhs, ")]")
-
+Base.show(io::IO, expr::BinaryExprAST) = print(io, "(", expr.lhs, ")", expr.op, "(", expr.rhs, ")")
 
 struct CallExprAST <: ExprAST
     callee::String
     args::Vector{ExprAST}
 end
 
-struct ProtoTypeAST
+struct PrototypeAST
     name::String
     args::Vector{String}
 end
 
 struct FunctionAST
-    proto::ProtoTypeAST
+    proto::PrototypeAST
     body::ExprAST
 end
 
@@ -65,10 +64,8 @@ end
 
 function ParseIdentifierExpr(ps::Parser)
     IdName = current_token(ps).val
-    @show current_token(ps).val 
     
     next_token!(ps)
-    @show current_token(ps).val 
     if current_token(ps).val != "("
         return VariableExprAST(IdName)
     end
@@ -90,7 +87,6 @@ function ParseIdentifierExpr(ps::Parser)
     next_token!(ps) # eat ')'
     return CallExprAST(IdName, args)
 end
-
 
 function ParsePrototype(ps)
     if current_token(ps).kind != tok_identifier
@@ -115,7 +111,7 @@ function ParsePrototype(ps)
 
     next_token!(ps)
 
-    return ProtoTypeAST(FnName, argnames)
+    return PrototypeAST(FnName, argnames)
 end
 
 function ParseDefinition(ps)
@@ -137,11 +133,11 @@ end
 
 function ParseTopLevelExpr(ps)
     E = ParseExpression(ps)
-    proto = ProtoTypeAST("", String[])
+    proto = PrototypeAST("", String[])
     return FunctionAST(proto, E)
 end
     
-@noinline function ParsePrimary(ps)
+function ParsePrimary(ps)
     curtok = current_token(ps)
     if curtok.kind == tok_identifier
         return ParseIdentifierExpr(ps)
@@ -151,48 +147,6 @@ end
         return ParseParenExpr(ps)
     else
         error("unknown token")
-    end
-end
-
-function HandleDefinition(ps)
-    r = ParseDefinition(ps)
-    println("Parsed a function definition")
-    return r
-end
-
-
-function HandleExtern(ps)
-    r = ParseExtern(ps)
-    println("Parsed an extern")
-    return r
-end
-
-
-function HandleTopLevelExpression(ps)
-    r = ParseTopLevelExpr(ps)
-    println("Parsed a top-level expr")
-    return r
-end
-
-function MainLoop()
-    while true
-        print("ready> ")
-        str = readline()
-        ps = Parser(str)
-        while true
-            tok = next_token!(ps)
-            if tok.kind == tok_eof
-                break
-            elseif tok.val == ";"
-                next_token!(ps)
-            elseif tok.kind == tok_def
-                @show HandleDefinition(ps)
-            elseif tok.kind == tok_extern
-                @show HandleExtern(ps)
-            else
-                @show HandleTopLevelExpression(ps)
-            end
-        end
     end
 end
 
