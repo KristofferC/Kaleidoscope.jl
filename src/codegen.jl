@@ -2,23 +2,37 @@ struct CodeGen
     context::LLVM.Context
     builder::LLVM.Builder
     mod::LLVM.Module
+    pass_manager::LLVM.FunctionPassManager
     namedvalues::Dict{String, LLVM.Value}
 end
 
 function CodeGen()
     ctx = LLVM.Context()
+    builder = LLVM.Builder(ctx)
+    mod = LLVM.Module("KaleidoscopeModule")
+    pass_manager = add_optimizations!(mod)
     return CodeGen(
         ctx,
-        LLVM.Builder(ctx),
-        LLVM.Module("KaleidoscopeModule"),
+        builder,
+        mod,
+        pass_manager,
         Dict{String, LLVM.Value}()
     )
+end
+
+function add_optimizations!(mod::LLVM.Module)
+    pass_manager = LLVM.FunctionPassManager(mod)
+    LLVM.instruction_combining!(pass_manager)
+    LLVM.reassociate!(pass_manager)
+    LLVM.gvn!(pass_manager)
+    LLVM.cfgsimplification!(pass_manager)
+    LLVM.initialize!(pass_manager)
+    return pass_manager
 end
 
 function codegen(cg::CodeGen, expr::NumberExprAST)
     return LLVM.ConstantFP(LLVM.DoubleType(), expr.val)
 end
-
 
 function codegen(cg::CodeGen, expr::VariableExprAST)
     V = cg.namedvalues[expr.name]
@@ -111,6 +125,8 @@ function codegen(cg::CodeGen, expr::FunctionAST)
         println()
         throw(LLVM.LLVMException("broken function"))
     end
+
+    LLVM.run!(cg.pass_manager, the_function)
 
     return the_function
 end
