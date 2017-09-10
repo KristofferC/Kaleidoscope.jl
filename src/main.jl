@@ -22,8 +22,8 @@ function HandleTopLevelExpression(ps, cg)
     return ir
 end
 
-function MainLoop()
-    cg = CodeGen()    
+function repl()
+    cg = CodeGen()
     while true
         print("ready> ")
         str = readline()
