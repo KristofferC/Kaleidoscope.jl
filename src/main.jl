@@ -35,11 +35,11 @@ function MainLoop()
             elseif tok.val == ";"
                 next_token!(ps)
             elseif tok.kind == tok_def
-                @show HandleDefinition(ps, cg)
+                HandleDefinition(ps, cg)
             elseif tok.kind == tok_extern
-                @show HandleExtern(ps, cg)
+                HandleExtern(ps, cg)
             else
-                @show HandleTopLevelExpression(ps, cg)
+                HandleTopLevelExpression(ps, cg)
             end
         end
     end

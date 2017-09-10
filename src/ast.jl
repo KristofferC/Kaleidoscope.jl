@@ -11,6 +11,13 @@ end
 current_token(ps::Parser) = ps.current_token
 next_token!(ps::Parser) = return (ps.current_token = gettok(ps.l))
 
+# Operator precedence
+const BinopPrecedence = Dict{String,Int}()
+BinopPrecedence["<"] = 10
+BinopPrecedence["+"] = 20
+BinopPrecedence["-"] = 20
+BinopPrecedence["*"] = 40
+
 
 #############
 # AST Nodes #
@@ -58,7 +65,6 @@ end
 function ParseNumberExpr(ps::Parser)
     result = NumberExprAST(Base.parse(Float64, current_token(ps).val))
     next_token!(ps)
-    println("parsed $result")
     return result
 end
 
@@ -78,7 +84,6 @@ function ParseIdentifierExpr(ps::Parser)
         if current_token(ps).val == ")"
             break
         end
-        @show  current_token(ps).val
         if current_token(ps).val != ","
             error("Expected ')' or ',' in argument list")
         end
@@ -152,7 +157,6 @@ end
 
 @noinline function ParseExpression(ps)
     LHS = ParsePrimary(ps)
-    @show LHS
     return ParseBinOpRHS(ps, 0, LHS)
 end
 
@@ -185,9 +189,3 @@ function GetTokPrecedence(ps)
     v = current_token(ps).val
     return (v in keys(BinopPrecedence)) ? BinopPrecedence[v] : -1
 end
-
-const BinopPrecedence = Dict{String,Int}()
-BinopPrecedence["<"] = 10
-BinopPrecedence["+"] = 20
-BinopPrecedence["-"] = 20
-BinopPrecedence["*"] = 40

@@ -16,7 +16,7 @@ function CodeGen()
 end
 
 function codegen(cg::CodeGen, expr::NumberExprAST)
-    return LLVM.ConstantFP(LLVM.DoubleType(cg.context), expr.val)
+    return LLVM.ConstantFP(LLVM.DoubleType(), expr.val)
 end
 
 
@@ -98,15 +98,18 @@ function codegen(cg::CodeGen, expr::FunctionAST)
 
     empty!(cg.namedvalues)
     for (i, param) in enumerate(LLVM.parameters(the_function))
-        cg.namedvalues[expr.args[i]] = param        
+        cg.namedvalues[expr.proto.args[i]] = param        
     end 
 
     body = codegen(cg, expr.body)
     # TODO, delete function on error
     LLVM.ret!(cg.builder, body)
     
-    status = convert(Core.Bool, LLVM.API.LLVMVerifyFunction(LLVM.ref(the_function), LLVM.API.LLVMReturnStatusAction))
-    status && throw(LLVM.LLVMException("broken function"))
+    status = convert(Core.Bool, LLVM.API.LLVMVerifyFunction(LLVM.ref(the_function), LLVM.API.LLVMPrintMessageAction))
+    if status
+        println()
+        throw(LLVM.LLVMException("broken function"))
+    end
 
     return the_function
 end
