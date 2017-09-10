@@ -23,11 +23,11 @@ function HandleTopLevelExpression(ps, cg)
 end
 
 function MainLoop()
+    cg = CodeGen()    
     while true
         print("ready> ")
         str = readline()
         ps = Parser(str)
-        cg = CodeGen()
         while true
             tok = next_token!(ps)
             if tok.kind == tok_eof

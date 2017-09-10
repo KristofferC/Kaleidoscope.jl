@@ -44,10 +44,10 @@ end
 
 function codegen(cg::CodeGen, expr::CallExprAST)
     if !haskey(LLVM.functions(cg.mod), expr.callee)
-        error("Unknown function $expr.name")
+        error("Unknown function $(expr.callee)")
     end
 
-    func = LLVM.functions(cg.mod)[expr.name]
+    func = LLVM.functions(cg.mod)[expr.callee]
     
     if length(LLVM.parameters(func)) != length(expr.args)
         error("number of parameters mismatch")
@@ -55,10 +55,10 @@ function codegen(cg::CodeGen, expr::CallExprAST)
 
     args = LLVM.Value[]
     for v in expr.args
-        push!(args, codegen(v))
+        push!(args, codegen(cg, v))
     end
 
-    return call!(cg.builder, func, args, "calltmp")
+    return LLVM.call!(cg.builder, func, args, "calltmp")
 end
 
 function codegen(cg::CodeGen, expr::PrototypeAST)
@@ -75,6 +75,7 @@ function codegen(cg::CodeGen, expr::PrototypeAST)
     else
         args = [LLVM.DoubleType() for i in 1:length(expr.args)]
         func_type = LLVM.FunctionType(LLVM.DoubleType(), args)
+        println("Adding function $(expr.name)")
         func = LLVM.Function(cg.mod, expr.name, func_type)
         LLVM.linkage!(func, LLVM.API.LLVMExternalLinkage)
 

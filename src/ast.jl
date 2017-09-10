@@ -111,7 +111,7 @@ function ParsePrototype(ps)
     end
 
     if current_token(ps).val != ")"
-        error("Expected ')' in prototype")
+        error("Expected ')' in prototype, got $(current_token(ps))")
     end
 
     next_token!(ps)
