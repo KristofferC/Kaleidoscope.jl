@@ -1,5 +1,5 @@
 module Kaleidoscope
 
-# package code goes here
-
+include("lexer.jl")
+include("ast.jl")
 end # module
