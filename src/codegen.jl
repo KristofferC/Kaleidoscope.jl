@@ -64,18 +64,18 @@ function codegen(cg::CodeGen, expr::BinaryExprAST)::LLVM.Value
     L = codegen(cg, expr.lhs)
     R = codegen(cg, expr.rhs)
 
-    if expr.op == "+"
+    if expr.op == Kinds.PLUS
         return LLVM.fadd!(cg.builder, L, R, "addtmp")
-    elseif expr.op == "-"
+    elseif expr.op == Kinds.MINUS
         return LLVM.fsub!(cg.builder, L, R, "subtmp")
-    elseif expr.op == "*"
+    elseif expr.op == Kinds.STAR
         return LLVM.fmul!(cg.builder, L, R, "multmp")
-    elseif expr.op == "/"
+    elseif expr.op == Kinds.SLASH
         return LLVM.fdiv!(cg.builder, L, R, "divtmp")
-    elseif expr.op == "<"
+    elseif expr.op == Kinds.LESS
         L = LLVM.fcmp!(cg.builder, LLVM.API.LLVMRealOLT, L, R, "cmptmp")
         return LLVM.uitofp!(cg.builder, L, LLVM.DoubleType(), "booltmp")
-    elseif expr.op == ">"
+    elseif expr.op == Kinds.GREATER
         L = LLVM.fcmp!(cg.builder, LLVM.API.LLVMRealOGT, L, R, "cmptmp")
         return LLVM.uitofp!(cg.builder, L, LLVM.DoubleType(), "booltmp")
     else

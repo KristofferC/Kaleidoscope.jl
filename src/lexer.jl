@@ -1,147 +1,164 @@
-const tok_eof = -1
+##########
+# Tokens #
+##########
 
-# commands
-const tok_def = -2
-const tok_extern = -3
-
-# primary
-const tok_identifier = -4
-const tok_number = -5
-
-# cflow
-const tok_if = -6
-const tok_then = -7
-const tok_else = -8
-
-# loop
-const tok_for = -9
-const tok_in = -10
-
-struct Token
-    kind::Int
-    val::String
+module Kinds
+@enum(Kind,
+    EOF,
+    IDENTIFIER,
+    NUMBER,
+    begin_keywords,
+        DEF,
+        EXTERN,
+        IF,
+        THEN,
+        ELSE,
+        FOR,
+        IN,
+    end_keywords,
+    begin_operators,
+        PLUS,
+        MINUS,
+        SLASH,
+        STAR,
+    end_operators,
+    begin_comparisons,
+        LESS,
+        GREATER,
+        EQUAL,
+    end_comparisons,
+    begin_delimiters,
+        LPAR,
+        RPAR,
+        SEMICOLON,
+        COMMA,
+    end_delimiters,
+    )
 end
 
-function Base.show(io::IO, t::Token)
-    if t.kind == tok_eof
-        print(io, "EOF")
-    elseif t.kind == tok_def
-        print(io, "DEF")
-    elseif t.kind == tok_extern
-        print(io, "EXTERN")
-    elseif t.kind == tok_if
-        print(io, "IF")
-    elseif t.kind == tok_then
-        print(io, "THEN")
-    elseif t.kind == tok_else
-        print(io, "ELSE")
-    elseif t.kind == tok_for
-        print(io, "FOR")
-    elseif t.kind == tok_in
-        print(io, "IN")
-    elseif t.kind == tok_identifier
-        print(io, "IDENTIFIER: $(t.val)")
-    elseif t.kind == tok_number
-        print(io, "NUMBER: $(t.val)")
-    else
-        print(io, "OTHER: $(t.val)")
+# Lookup-table for keywords
+const KEYWORD_KINDS = Dict{String, Kinds.Kind}()
+for kind in instances(Kinds.Kind)
+    if Kinds.begin_keywords < kind < Kinds.end_keywords
+        KEYWORD_KINDS[lowercase(string(kind))] = kind
     end
 end
+
+struct Token
+    kind::Kinds.Kind
+    val::String
+end
+Token(k::Kinds.Kind) = Token(k, "")
+
+function Base.show(io::IO, t::Token)
+    print(io, string(t.kind))
+    if !isempty(t.val)
+        print(io, ": ", t.val)
+    end
+end
+
+
+#########
+# Lexer #
+#########
 
 mutable struct Lexer{IO_t <: IO}
     io::IO_t
     last_char::Char
-    buffer_start::Int
     buffer_scratch::IOBuffer
 end
 
-Lexer(io::IO) = Lexer(io, ' ', position(io), IOBuffer())
+Lexer(io::IO) = Lexer(io, EOF_CHAR, IOBuffer())
 Lexer(str::String) = Lexer(IOBuffer(str))
 
-tokenize(x) = Lexer(x)
-
-# Iterator interface
-Base.iteratorsize(::Type{Lexer{IO_t}}) where {IO_t} = Base.SizeUnknown()
-Base.iteratoreltype(::Type{Lexer{IO_t}}) where {IO_t} = Base.HasEltype()
-Base.eltype(::Type{Lexer{IO_t}}) where {IO_t} = Token
-
-function Base.start(l)
-    seek(l.io, l.buffer_start)
-    false
+function Base.collect(l::Lexer)
+    tokens = Token[]
+    while true
+        t = gettok(l)
+        push!(tokens, t)
+        t.kind == Kinds.EOF && break
+    end
+    return tokens
 end
 
-function Base.next(l::Lexer, ::Any)
-    t = gettok(l)
-    return t, t.kind == tok_eof
-end
-
-Base.done(::Lexer, isdone) = isdone
 const EOF_CHAR = convert(Char,typemax(UInt32))
-readchar(io::IO) = eof(io) ? EOF_CHAR : read(io, Char)
 
-isvalididentifier(x) = isalpha(x) || isdigit(x)
+# Reading
+readchar(io::IO) = eof(io) ? EOF_CHAR : read(io, Char)
+function readchar(l::Lexer, dowrite = true)
+    if l.last_char != EOF_CHAR
+        c = l.last_char
+        l.last_char = EOF_CHAR
+    else
+        c = readchar(l.io)
+    end
+    dowrite && write(l.buffer_scratch, c)
+    return c
+end
+discardchar(l::Lexer) = readchar(l, false)
+
+function readwhile(f, l::Lexer, dowrite=true)
+    while true
+        c = readchar(l, false)
+        if !f(c)
+            l.last_char = c
+            break
+        end
+        dowrite && write(l.buffer_scratch, c)
+    end
+end
+discardwhile(f, l::Lexer) = readwhile(f, l, false)
 
 function gettok(l::Lexer)::Token
-
-    if l.last_char == EOF_CHAR
-        return Token(tok_eof, "")
-    end
-
-    while isspace(l.last_char)
-        l.last_char = readchar(l.io)
-    end
-
-    if isalpha(l.last_char)
-        write(l.buffer_scratch, l.last_char)
-        while true
-            l.last_char = readchar(l.io)
-            !isvalididentifier(l.last_char) && break
-            write(l.buffer_scratch, l.last_char)
-        end
-
-        identifier = String(take!(l.buffer_scratch))
-        if identifier == "def"
-            return Token(tok_def, identifier)
-        elseif identifier == "extern"
-            return Token(tok_extern, identifier)
-        elseif identifier == "if"
-            return Token(tok_if, identifier)
-        elseif identifier == "then"
-            return Token(tok_then, identifier)
-        elseif identifier == "else"
-            return Token(tok_else, identifier)
-        elseif identifier == "for"
-            return Token(tok_for, identifier)
-        elseif identifier == "in"
-            return Token(tok_in, identifier)
-        else
-            return Token(tok_identifier, identifier)
-        end
-    end
-
-    # TODO, this is kinda ugly
-    if (isdigit(l.last_char) || l.last_char == '.')
-        write(l.buffer_scratch, l.last_char)
-        l.last_char = readchar(l.io)
-        while isdigit(l.last_char) || l.last_char == '.'
-            write(l.buffer_scratch, l.last_char)
-            l.last_char = readchar(l.io)
-        end
-        identifier = String(take!(l.buffer_scratch))
-        return Token(tok_number, identifier)
-    end
-
-    if l.last_char == '#'
-        l.last_char = readchar(l.io)
-        while l.last_char != '\n' && l.last_char != '\r'
-            l.last_char = readchar(l.io)
-        end
-        return gettok(l)
-    end
-
-    this_char = l.last_char
-    l.last_char = readchar(l.io)
-    return Token(Int(this_char), string(this_char))
+    t = _gettok(l)
+    seek(l.buffer_scratch, 0)
+    return t
 end
 
+function _gettok(l::Lexer)::Token
+    discardwhile(isspace, l)
+    if l.last_char == '#'
+        discardwhile(x -> (x == 'r' || x == '\n'), l)
+        discardchar(l) # discard the new line
+    end
+    c = readchar(l)
+    if c == EOF_CHAR; return Token(Kinds.EOF)
+    elseif isalpha(c); return lex_alpha(l)
+    # number
+    elseif (c == '.' || isdigit(c)); return lex_number(l)
+    # delimiters
+    elseif c == '('; return Token(Kinds.LPAR)
+    elseif c == ')'; return Token(Kinds.RPAR)
+    elseif c == ';'; return Token(Kinds.SEMICOLON)
+    elseif c == ','; return Token(Kinds.COMMA)
+    # comparisons
+    elseif c == '<'; return Token(Kinds.LESS)
+    elseif c == '>'; return Token(Kinds.GREATER)
+    elseif c == '='; return Token(Kinds.EQUAL)
+    # operators
+    elseif c == '+'; return Token(Kinds.PLUS)
+    elseif c == '-'; return Token(Kinds.MINUS)
+    elseif c == '/'; return Token(Kinds.SLASH)
+    elseif c == '*'; return Token(Kinds.STAR)
+    else error("failed to handle character $c")
+    end
+end
 
+function lex_alpha(l::Lexer)
+    isvalididentifier(x) = isalpha(x) || isdigit(x)
+    readwhile(isvalididentifier, l)
+    str = String(take!(l.buffer_scratch))
+    if haskey(KEYWORD_KINDS, str)
+        return Token(KEYWORD_KINDS[str])
+    else
+        return Token(Kinds.IDENTIFIER, str)
+    end
+end
+
+# TODO: Better lexing of numbers
+function lex_number(l)
+    isvalid_digit = x -> isdigit(x) || x == '.' 
+    readwhile(isvalid_digit, l)
+    num = String(take!(l.buffer_scratch))
+    return Token(Kinds.NUMBER, num)
+end

@@ -12,16 +12,16 @@ current_token(ps::Parser) = ps.current_token
 next_token!(ps::Parser) = return (ps.current_token = gettok(ps.l))
 
 # Operator precedence
-const BinopPrecedence = Dict{String,Int}()
-BinopPrecedence["<"] = 10
-BinopPrecedence[">"] = 10
-BinopPrecedence["+"] = 20
-BinopPrecedence["-"] = 20
-BinopPrecedence["*"] = 40
-BinopPrecedence["/"] = 40
+const BinopPrecedence = Dict{Kinds.Kind, Int}()
+BinopPrecedence[Kinds.LESS]    = 10
+BinopPrecedence[Kinds.GREATER] = 10
+BinopPrecedence[Kinds.PLUS]    = 20
+BinopPrecedence[Kinds.MINUS]   = 20
+BinopPrecedence[Kinds.STAR]    = 40
+BinopPrecedence[Kinds.SLASH]   = 40
 
-function GetTokPrecedence(ps)
-    v = current_token(ps).val
+function operator_precedence(ps)
+    v = current_token(ps).kind
     return (v in keys(BinopPrecedence)) ? BinopPrecedence[v] : -1
 end
 
@@ -42,11 +42,11 @@ end
 Base.show(io::IO, expr::VariableExprAST) = print(io, expr.name)
 
 struct BinaryExprAST <: ExprAST
-    op::String
+    op::Kinds.Kind
     lhs::ExprAST
     rhs::ExprAST
 end
-Base.show(io::IO, expr::BinaryExprAST) = print(io, "(", expr.lhs, ")", expr.op, "(", expr.rhs, ")")
+Base.show(io::IO, expr::BinaryExprAST) = print(io, expr.op, "(", expr.lhs, ", ", expr.rhs, ")")
 
 struct CallExprAST <: ExprAST
     callee::String
@@ -78,7 +78,6 @@ struct FunctionAST
 end
 
 
-
 #####################
 # Parse Expressions #
 #####################
@@ -90,40 +89,40 @@ function ParseNumberExpr(ps::Parser)::NumberExprAST
 end
 
 function ParseIdentifierExpr(ps::Parser)::Union{ VariableExprAST, CallExprAST}
-    IdName = current_token(ps).val
+    idname = current_token(ps).val
     
     next_token!(ps)
-    if current_token(ps).val != "("
-        return VariableExprAST(IdName)
+    if current_token(ps).kind != Kinds.LPAR
+        return VariableExprAST(idname)
     end
 
     next_token!(ps) # eat '('
     args = ExprAST[]
     while true
         push!(args, ParseExpression(ps))
-        if current_token(ps).val == ")"
+        if current_token(ps).kind == Kinds.RPAR
             break
         end
-        if current_token(ps).val != ","
+        if current_token(ps).kind != Kinds.COMMA
             error("Expected ')' or ',' in argument list")
         end
         next_token!(ps) # eat the ','
     end
     next_token!(ps) # eat ')'
-    return CallExprAST(IdName, args)
+    return CallExprAST(idname, args)
 end
 
 function ParseIfExpr(ps)::IfExprAST
     next_token!(ps) # eat 'if'
     cond = ParseExpression(ps)
 
-    if current_token(ps).kind != tok_then
+    if current_token(ps).kind != Kinds.THEN
         error("expected 'then'")
     end
     next_token!(ps) # eat then
     then = ParseExpression(ps)
 
-    if current_token(ps).kind != tok_else
+    if current_token(ps).kind != Kinds.ELSE
         error("expected 'else'")
     end
     next_token!(ps)
@@ -133,29 +132,29 @@ function ParseIfExpr(ps)::IfExprAST
 end
 
 function ParsePrototype(ps)::PrototypeAST
-    if current_token(ps).kind != tok_identifier
+    if current_token(ps).kind != Kinds.IDENTIFIER
         error("Expected function name in prototype")
     end
 
-    FnName = current_token(ps).val
+    func_name = current_token(ps).val
     tok = next_token!(ps) # eat identifier
 
-    if tok.val != "("
+    if tok.kind != Kinds.LPAR
         error("Expected '(' in prototype")
     end
 
     argnames = String[]
-    while (next_token!(ps).kind == tok_identifier)
+    while (next_token!(ps).kind == Kinds.IDENTIFIER)
         push!(argnames, current_token(ps).val)
     end
 
-    if current_token(ps).val != ")"
+    if current_token(ps).kind != Kinds.RPAR
         error("Expected ')' in prototype, got $(current_token(ps))")
     end
 
     next_token!(ps)
 
-    return PrototypeAST(FnName, argnames)
+    return PrototypeAST(func_name, argnames)
 end
 
 function ParseDefinition(ps)::FunctionAST
@@ -168,7 +167,7 @@ end
 function ParseParenExpr(ps::Parser)::ExprAST
     next_token!(ps) # eat '('
     V = ParseExpression(ps)
-    if current_token(ps).val != ")"
+    if current_token(ps).kind != Kinds.RPAREN
         error("expected ')'")
     end
     next_token!(ps) # eat ')'
@@ -177,41 +176,41 @@ end
 
 function ParseBinOpRHS(ps, ExprPrec::Int, LHS::ExprAST)::ExprAST
     while true
-        tokprec = GetTokPrecedence(ps)
+        tokprec = operator_precedence(ps)
         if tokprec < ExprPrec
             return LHS
         end
 
-        BinOp = current_token(ps)
+        bin_op = current_token(ps)
         next_token!(ps) # eat binary token
 
         RHS = ParsePrimary(ps)
-        nextprec = GetTokPrecedence(ps)
+        nextprec = operator_precedence(ps)
         if tokprec < nextprec 
             RHS = ParseBinOpRHS(ps, tokprec + 1, RHS)
         end
 
-        LHS = BinaryExprAST(BinOp.val, LHS, RHS)
+        LHS = BinaryExprAST(bin_op.kind, LHS, RHS)
     end
 end
 
 function ParseForExpr(ps)::ForExprAST
     next_token!(ps) # eat 'for'
 
-    if current_token(ps).kind != tok_identifier
+    if current_token(ps).kind != Kinds.IDENTIFIER
         error("expected identifier after for")
     end
 
     idname = current_token(ps).val
     next_token!(ps) # eat identifier
 
-    if current_token(ps).val != "="
+    if current_token(ps).kind != Kinds.EQUAL
         error("expected `=` after identifier in for expression")
     end
     next_token!(ps) # eat =
 
     start = ParseExpression(ps)
-    if current_token(ps).val != ","
+    if current_token(ps).kind != Kinds.COMMA
         error("expected `,` after for start value")
     end
     next_token!(ps) # eat ,
@@ -219,13 +218,13 @@ function ParseForExpr(ps)::ForExprAST
     endd = ParseExpression(ps)
 
     # TODO: make optional
-    if current_token(ps).val != ","
+    if current_token(ps).kind != Kinds.COMMA
         error("expected ',' after for end value")
     end
     next_token!(ps) # eat ,
     step = ParseExpression(ps)
 
-    if current_token(ps).kind != tok_in
+    if current_token(ps).kind != Kinds.IN
         error("expected 'in' after for")
     end
     next_token!(ps) # eat in
@@ -254,15 +253,15 @@ end
 
 function ParsePrimary(ps)::ExprAST
     curtok = current_token(ps)
-    if curtok.kind == tok_identifier
+    if curtok.kind == Kinds.IDENTIFIER
         return ParseIdentifierExpr(ps)
-    elseif curtok.kind == tok_number
+    elseif curtok.kind == Kinds.NUMBER
         return ParseNumberExpr(ps)
-    elseif curtok.val == "("
+    elseif curtok.kind == Kinds.LPAR
         return ParseParenExpr(ps)
-    elseif curtok.kind == tok_if
+    elseif curtok.kind == Kinds.IF
         return ParseIfExpr(ps)
-    elseif curtok.kind == tok_for
+    elseif curtok.kind == Kinds.FOR
         return ParseForExpr(ps)
     else
         error("unknown token: $curtok")

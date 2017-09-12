@@ -32,7 +32,6 @@ function HandleTopLevelExpression(ps, cg)
 end
 
 function repl()
-    reset_timer!(to)
     cg = CodeGen()
     initialize_module_and_pass_manager!(cg)
     while true
@@ -41,13 +40,13 @@ function repl()
         ps = Parser(str)
         while true
             tok = next_token!(ps)
-            if tok.kind == tok_eof
+            if tok.kind == Kinds.EOF
                 break
             elseif tok.val == ";"
                 next_token!(ps)
-            elseif tok.kind == tok_def
+            elseif tok.kind == Kinds.DEF
                 HandleDefinition(ps, cg)
-            elseif tok.kind == tok_extern
+            elseif tok.kind == Kinds.EXTERN
                 HandleExtern(ps, cg)
             else
                 HandleTopLevelExpression(ps, cg)
