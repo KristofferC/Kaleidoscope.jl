@@ -47,6 +47,12 @@ struct CallExprAST <: ExprAST
     args::Vector{ExprAST}
 end
 
+struct IfExprAST <: ExprAST
+    cond::ExprAST
+    then::ExprAST
+    elsee::ExprAST
+end
+
 struct PrototypeAST
     name::String
     args::Vector{String}
@@ -62,13 +68,13 @@ end
 # Parse Expressions #
 #####################
 
-function ParseNumberExpr(ps::Parser)
+function ParseNumberExpr(ps::Parser)::NumberExprAST
     result = NumberExprAST(Base.parse(Float64, current_token(ps).val))
     next_token!(ps)
     return result
 end
 
-function ParseIdentifierExpr(ps::Parser)
+function ParseIdentifierExpr(ps::Parser)::Union{ VariableExprAST, CallExprAST}
     IdName = current_token(ps).val
     
     next_token!(ps)
@@ -79,7 +85,6 @@ function ParseIdentifierExpr(ps::Parser)
     next_token!(ps) # eat '('
     args = ExprAST[]
     while true
-        println("Parsing expression...")
         push!(args, ParseExpression(ps))
         if current_token(ps).val == ")"
             break
@@ -93,7 +98,26 @@ function ParseIdentifierExpr(ps::Parser)
     return CallExprAST(IdName, args)
 end
 
-function ParsePrototype(ps)
+function ParseIfExpr(ps)::IfExprAST
+    next_token!(ps) # eat 'if'
+    cond = ParseExpression(ps)
+
+    if current_token(ps).kind != tok_then
+        error("expected 'then'")
+    end
+    next_token!(ps) # eat then
+    then = ParseExpression(ps)
+
+    if current_token(ps).kind != tok_else
+        error("expected 'else'")
+    end
+    next_token!(ps)
+    elsee = ParseExpression(ps)
+
+    return IfExprAST(cond, then, elsee)
+end
+
+function ParsePrototype(ps)::PrototypeAST
     if current_token(ps).kind != tok_identifier
         error("Expected function name in prototype")
     end
@@ -119,14 +143,14 @@ function ParsePrototype(ps)
     return PrototypeAST(FnName, argnames)
 end
 
-function ParseDefinition(ps)
+function ParseDefinition(ps)::FunctionAST
     next_token!(ps) # eat def
     proto = ParsePrototype(ps)
     E = ParseExpression(ps)
     return FunctionAST(proto, E)
 end
 
-function ParseParenExpr(ps::Parser)
+function ParseParenExpr(ps::Parser)::ExprAST
     next_token!(ps) # eat '('
     V = ParseExpression(ps)
     if current_token(ps).val != ")"
@@ -136,13 +160,13 @@ function ParseParenExpr(ps::Parser)
     return V
 end
 
-function ParseTopLevelExpr(ps)
+function ParseTopLevelExpr(ps)::FunctionAST
     E = ParseExpression(ps)
-    proto = PrototypeAST("", String[])
+    proto = PrototypeAST("__anon_expr", String[])
     return FunctionAST(proto, E)
 end
     
-function ParsePrimary(ps)
+function ParsePrimary(ps)::ExprAST
     curtok = current_token(ps)
     if curtok.kind == tok_identifier
         return ParseIdentifierExpr(ps)
@@ -150,17 +174,19 @@ function ParsePrimary(ps)
         return ParseNumberExpr(ps)
     elseif curtok.val == "("
         return ParseParenExpr(ps)
+    elseif curtok.kind == tok_if
+        return ParseIfExpr(ps);
     else
-        error("unknown token")
+        error("unknown token: $curtok")
     end
 end
 
-@noinline function ParseExpression(ps)
+@noinline function ParseExpression(ps)::ExprAST
     LHS = ParsePrimary(ps)
     return ParseBinOpRHS(ps, 0, LHS)
 end
 
-function ParseBinOpRHS(ps, ExprPrec::Int, LHS::ExprAST)
+function ParseBinOpRHS(ps, ExprPrec::Int, LHS::ExprAST)::ExprAST
     while true
         tokprec = GetTokPrecedence(ps)
         if tokprec < ExprPrec
@@ -180,7 +206,7 @@ function ParseBinOpRHS(ps, ExprPrec::Int, LHS::ExprAST)
     end
 end
 
-function ParseExtern(ps)
+function ParseExtern(ps)::PrototypeAST
     next_token!(ps) # eat 'extern'
     return ParsePrototype(ps)
 end

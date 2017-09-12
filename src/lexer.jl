@@ -8,6 +8,11 @@ const tok_extern = -3
 const tok_identifier = -4
 const tok_number = -5
 
+# cflow
+const tok_if = -6
+const tok_then = -7
+const tok_else = -8
+
 struct Token
     kind::Int
     val::String
@@ -20,6 +25,12 @@ function Base.show(io::IO, t::Token)
         print(io, "DEF")
     elseif t.kind == tok_extern
         print(io, "EXTERN")
+    elseif t.kind == tok_if
+        print(io, "IF")
+    elseif t.kind == tok_then
+        print(io, "THEN")
+    elseif t.kind == tok_else
+        print(io, "ELSE")
     elseif t.kind == tok_identifier
         print(io, "IDENTIFIER: $(t.val)")
     elseif t.kind == tok_number
@@ -63,7 +74,6 @@ readchar(io::IO) = eof(io) ? EOF_CHAR : read(io, Char)
 isvalididentifier(x) = isalpha(x) || isdigit(x)
 
 function gettok(l::Lexer)::Token
-    sleep(0.01)
 
     if l.last_char == EOF_CHAR
         return Token(tok_eof, "")
@@ -86,6 +96,12 @@ function gettok(l::Lexer)::Token
             return Token(tok_def, identifier)
         elseif identifier == "extern"
             return Token(tok_extern, identifier)
+        elseif identifier == "if"
+            return Token(tok_if, identifier)
+        elseif identifier == "then"
+            return Token(tok_then, identifier)
+        elseif identifier == "else"
+            return Token(tok_else, identifier)
         else
             return Token(tok_identifier, identifier)
         end
