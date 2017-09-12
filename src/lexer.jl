@@ -13,6 +13,10 @@ const tok_if = -6
 const tok_then = -7
 const tok_else = -8
 
+# loop
+const tok_for = -9
+const tok_in = -10
+
 struct Token
     kind::Int
     val::String
@@ -31,6 +35,10 @@ function Base.show(io::IO, t::Token)
         print(io, "THEN")
     elseif t.kind == tok_else
         print(io, "ELSE")
+    elseif t.kind == tok_for
+        print(io, "FOR")
+    elseif t.kind == tok_in
+        print(io, "IN")
     elseif t.kind == tok_identifier
         print(io, "IDENTIFIER: $(t.val)")
     elseif t.kind == tok_number
@@ -102,10 +110,14 @@ function gettok(l::Lexer)::Token
             return Token(tok_then, identifier)
         elseif identifier == "else"
             return Token(tok_else, identifier)
+        elseif identifier == "for"
+            return Token(tok_for, identifier)
+        elseif identifier == "in"
+            return Token(tok_in, identifier)
         else
             return Token(tok_identifier, identifier)
         end
-    end    
+    end
 
     # TODO, this is kinda ugly
     if (isdigit(l.last_char) || l.last_char == '.')
@@ -121,7 +133,6 @@ function gettok(l::Lexer)::Token
 
     if l.last_char == '#'
         l.last_char = readchar(l.io)
-        # Reads one too much
         while l.last_char != '\n' && l.last_char != '\r'
             l.last_char = readchar(l.io)
         end

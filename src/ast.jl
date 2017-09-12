@@ -14,10 +14,16 @@ next_token!(ps::Parser) = return (ps.current_token = gettok(ps.l))
 # Operator precedence
 const BinopPrecedence = Dict{String,Int}()
 BinopPrecedence["<"] = 10
+BinopPrecedence[">"] = 10
 BinopPrecedence["+"] = 20
 BinopPrecedence["-"] = 20
 BinopPrecedence["*"] = 40
+BinopPrecedence["/"] = 40
 
+function GetTokPrecedence(ps)
+    v = current_token(ps).val
+    return (v in keys(BinopPrecedence)) ? BinopPrecedence[v] : -1
+end
 
 #############
 # AST Nodes #
@@ -53,6 +59,14 @@ struct IfExprAST <: ExprAST
     elsee::ExprAST
 end
 
+struct ForExprAST <: ExprAST
+    varname::String
+    start::ExprAST
+    endd::ExprAST
+    step::ExprAST
+    body::ExprAST
+end
+
 struct PrototypeAST
     name::String
     args::Vector{String}
@@ -62,6 +76,7 @@ struct FunctionAST
     proto::PrototypeAST
     body::ExprAST
 end
+
 
 
 #####################
@@ -160,32 +175,6 @@ function ParseParenExpr(ps::Parser)::ExprAST
     return V
 end
 
-function ParseTopLevelExpr(ps)::FunctionAST
-    E = ParseExpression(ps)
-    proto = PrototypeAST("__anon_expr", String[])
-    return FunctionAST(proto, E)
-end
-    
-function ParsePrimary(ps)::ExprAST
-    curtok = current_token(ps)
-    if curtok.kind == tok_identifier
-        return ParseIdentifierExpr(ps)
-    elseif curtok.kind == tok_number
-        return ParseNumberExpr(ps)
-    elseif curtok.val == "("
-        return ParseParenExpr(ps)
-    elseif curtok.kind == tok_if
-        return ParseIfExpr(ps);
-    else
-        error("unknown token: $curtok")
-    end
-end
-
-@noinline function ParseExpression(ps)::ExprAST
-    LHS = ParsePrimary(ps)
-    return ParseBinOpRHS(ps, 0, LHS)
-end
-
 function ParseBinOpRHS(ps, ExprPrec::Int, LHS::ExprAST)::ExprAST
     while true
         tokprec = GetTokPrecedence(ps)
@@ -206,12 +195,76 @@ function ParseBinOpRHS(ps, ExprPrec::Int, LHS::ExprAST)::ExprAST
     end
 end
 
+function ParseForExpr(ps)::ForExprAST
+    next_token!(ps) # eat 'for'
+
+    if current_token(ps).kind != tok_identifier
+        error("expected identifier after for")
+    end
+
+    idname = current_token(ps).val
+    next_token!(ps) # eat identifier
+
+    if current_token(ps).val != "="
+        error("expected `=` after identifier in for expression")
+    end
+    next_token!(ps) # eat =
+
+    start = ParseExpression(ps)
+    if current_token(ps).val != ","
+        error("expected `,` after for start value")
+    end
+    next_token!(ps) # eat ,
+
+    endd = ParseExpression(ps)
+
+    # TODO: make optional
+    if current_token(ps).val != ","
+        error("expected ',' after for end value")
+    end
+    next_token!(ps) # eat ,
+    step = ParseExpression(ps)
+
+    if current_token(ps).kind != tok_in
+        error("expected 'in' after for")
+    end
+    next_token!(ps) # eat in
+
+    body = ParseExpression(ps)
+
+    return ForExprAST(idname, start, endd, step, body)
+end
+
 function ParseExtern(ps)::PrototypeAST
     next_token!(ps) # eat 'extern'
     return ParsePrototype(ps)
 end
 
-function GetTokPrecedence(ps)
-    v = current_token(ps).val
-    return (v in keys(BinopPrecedence)) ? BinopPrecedence[v] : -1
+function ParseTopLevelExpr(ps)::FunctionAST
+    E = ParseExpression(ps)
+    proto = PrototypeAST("__anon_expr", String[])
+    return FunctionAST(proto, E)
+end
+
+
+@noinline function ParseExpression(ps)::ExprAST
+    LHS = ParsePrimary(ps)
+    return ParseBinOpRHS(ps, 0, LHS)
+end
+
+function ParsePrimary(ps)::ExprAST
+    curtok = current_token(ps)
+    if curtok.kind == tok_identifier
+        return ParseIdentifierExpr(ps)
+    elseif curtok.kind == tok_number
+        return ParseNumberExpr(ps)
+    elseif curtok.val == "("
+        return ParseParenExpr(ps)
+    elseif curtok.kind == tok_if
+        return ParseIfExpr(ps)
+    elseif curtok.kind == tok_for
+        return ParseForExpr(ps)
+    else
+        error("unknown token: $curtok")
+    end
 end

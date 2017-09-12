@@ -70,8 +70,14 @@ function codegen(cg::CodeGen, expr::BinaryExprAST)::LLVM.Value
         return LLVM.fsub!(cg.builder, L, R, "subtmp")
     elseif expr.op == "*"
         return LLVM.fmul!(cg.builder, L, R, "multmp")
+    elseif expr.op == "/"
+        return LLVM.fdiv!(cg.builder, L, R, "divtmp")
     elseif expr.op == "<"
-        error("Unhandled <")
+        L = LLVM.fcmp!(cg.builder, LLVM.API.LLVMRealOLT, L, R, "cmptmp")
+        return LLVM.uitofp!(cg.builder, L, LLVM.DoubleType(), "booltmp")
+    elseif expr.op == ">"
+        L = LLVM.fcmp!(cg.builder, LLVM.API.LLVMRealOGT, L, R, "cmptmp")
+        return LLVM.uitofp!(cg.builder, L, LLVM.DoubleType(), "booltmp")
     else
         error("Unhandled binary operator $(expr.op)")
     end
@@ -79,11 +85,6 @@ end
 
 function codegen(cg::CodeGen, expr::CallExprAST)::LLVM.Value
     func = get_function(cg, expr.callee)
-
-    #if !haskey(LLVM.functions(cg.mod), expr.callee)
-    #    error("Unknown function $(expr.callee)")
-    #end
-
 
     if length(LLVM.parameters(func)) != length(expr.args)
         error("number of parameters mismatch")
@@ -138,7 +139,7 @@ function codegen(cg::CodeGen, expr::FunctionAST)::LLVM.Value
     body = codegen(cg, expr.body)
     # TODO, delete function on error
     LLVM.ret!(cg.builder, body)
-    
+    @show cg.mod
     status = convert(Core.Bool, LLVM.API.LLVMVerifyFunction(LLVM.ref(the_function), LLVM.API.LLVMPrintMessageAction))
     if status
         throw(LLVM.LLVMException("broken function"))
@@ -150,18 +151,15 @@ function codegen(cg::CodeGen, expr::FunctionAST)::LLVM.Value
 end
 
 function codegen(cg::CodeGen, expr::IfExprAST)
-    cond = codegen(cg, expr.cond)
-    zero = LLVM.ConstantFP(LLVM.DoubleType(), 0.0)
-
-    condv = LLVM.fcmp!(cg.builder, LLVM.API.LLVMRealONE, cond, zero, "ifcond")
-
     func = LLVM.parent(LLVM.position(cg.builder))
-
-    # Create blocks
     then = LLVM.BasicBlock(func, "then")
     elsee = LLVM.BasicBlock(func, "else")
     merge = LLVM.BasicBlock(func, "ifcont")
 
+    # if
+    cond = codegen(cg, expr.cond)
+    zero = LLVM.ConstantFP(LLVM.DoubleType(), 0.0)
+    condv = LLVM.fcmp!(cg.builder, LLVM.API.LLVMRealONE, cond, zero, "ifcond")
     LLVM.br!(cg.builder, condv, then, elsee)
 
     # then
@@ -176,9 +174,59 @@ function codegen(cg::CodeGen, expr::IfExprAST)
     LLVM.br!(cg.builder, merge)
     else_block = position(cg.builder)
 
+    # merge
     LLVM.position!(cg.builder, merge)
     phi = LLVM.phi!(cg.builder, LLVM.DoubleType(), "iftmp")
     append!(LLVM.incoming(phi), [(thencg, then_block), (elsecg, else_block)])
 
     return phi
+end
+
+function codegen(cg::CodeGen, expr::ForExprAST)
+    start = codegen(cg, expr.start)
+
+    startblock = position(cg.builder)
+    func = LLVM.parent(startblock)
+    loopblock = LLVM.BasicBlock(func, "loop")
+
+    LLVM.br!(cg.builder, loopblock)
+
+    LLVM.position!(cg.builder, loopblock)
+    variable = LLVM.phi!(cg.builder, LLVM.DoubleType(), expr.varname)
+    push!(LLVM.incoming(variable), (start, startblock))
+
+    # TODO: What if not found...
+    shadowed_var = false
+    if haskey(cg.namedvalues, expr.varname)
+        shadowed_var = true
+        oldval = cg.namedvalues[expr.varname]
+    end
+    cg.namedvalues[expr.varname] = variable
+
+    codegen(cg, expr.body)
+
+    step = codegen(cg, expr.step)
+
+    nextvar = LLVM.fadd!(cg.builder, variable, step, "nextvar")
+
+    endd = codegen(cg, expr.endd)
+
+    endd = LLVM.fcmp!(cg.builder, LLVM.API.LLVMRealONE, endd,
+        LLVM.ConstantFP(LLVM.DoubleType(), 1.0))
+
+    loopendblock = position(cg.builder)
+    afterblock = LLVM.BasicBlock(func, "afterloop")
+
+    LLVM.br!(cg.builder, endd, loopblock, afterblock)
+
+    LLVM.position!(cg.builder, afterblock)
+    push!(LLVM.incoming(variable), (nextvar, loopendblock))
+
+    if shadowed_var
+        cg.namedvalues[expr.varname] = oldval
+    else
+        delete!(cg.namedvalues, expr.varname)
+    end
+
+    return LLVM.ConstantFP(LLVM.DoubleType(), 0.0)
 end
