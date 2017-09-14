@@ -2,12 +2,12 @@ mutable struct CodeGen
     context::LLVM.Context
     builder::LLVM.Builder
     jit::LLVM.ExecutionEngine
-    namedvalues::Dict{String, LLVM.Value}
+    namedvalues::Dict{String, LLVM.AllocaInst}
     function_protos::Dict{String, PrototypeAST}
     mod::LLVM.Module
     pass_manager::LLVM.FunctionPassManager
     function CodeGen(context::LLVM.Context, builder::LLVM.Builder, jit::LLVM.ExecutionEngine,
-                     namedvalues::Dict{String, LLVM.Value}, function_protos::Dict{String, PrototypeAST})
+                     namedvalues::Dict{String, LLVM.AllocaInst}, function_protos::Dict{String, PrototypeAST})
         new(context, builder, jit, function_protos, namedvalues)
     end
 end
@@ -20,7 +20,7 @@ function CodeGen()
         ctx,
         builder,
         jit,
-        Dict{String, LLVM.Value}(),
+        Dict{String, LLVM.AllocaInst}(),
         Dict{String, PrototypeAST}(),
     )
 end
@@ -34,6 +34,7 @@ function initialize_module_and_pass_manager!(cg::CodeGen)
     LLVM.reassociate!(cg.pass_manager)
     LLVM.gvn!(cg.pass_manager)
     LLVM.cfgsimplification!(cg.pass_manager)
+    LLVM.promote_memory_to_register!(cg.pass_manager)
     LLVM.initialize!(cg.pass_manager)
     return cg
 end
@@ -50,17 +51,44 @@ function get_function(cg::CodeGen, name::String)
     error("I guess?")
 end
 
+function create_entry_block_allocation(fn::LLVM.Function, varname::String)
+    local alloc
+    LLVM.Builder() do builder
+        entry_block = LLVM.entry(fn)
+        LLVM.position!(builder, entry_block)
+        alloc = LLVM.alloca!(builder, LLVM.DoubleType(), varname)
+    end
+    return alloc
+end
+
 function codegen(cg::CodeGen, expr::NumberExprAST)::LLVM.Value
     return LLVM.ConstantFP(LLVM.DoubleType(), expr.val)
 end
 
 function codegen(cg::CodeGen, expr::VariableExprAST)::LLVM.Value
     # TODO: Error handling if argument is not found
+    if !haskey(cg.namedvalues, expr.name)
+        error("did not find variable $(expr.name)")
+    end
     V = cg.namedvalues[expr.name]
-    return V
+    return LLVM.load!(cg.builder, V, expr.name)
 end
 
 function codegen(cg::CodeGen, expr::BinaryExprAST)::LLVM.Value
+    if expr.op == Kinds.EQUAL
+        LHS = expr.lhs
+        if !(LHS isa VariableExprAST)
+            error("destination of '=' must be a variable")
+        end
+        R = codegen(cg, expr.rhs)
+
+        if !haskey(cg.namedvalues, LHS.name)
+            error("unknown variable name $(LHS.name)")
+        end
+
+        LLVM.store!(cg.builder, R, cg.namedvalues[LHS.name])
+        return R
+    end
     L = codegen(cg, expr.lhs)
     R = codegen(cg, expr.rhs)
 
@@ -133,7 +161,10 @@ function codegen(cg::CodeGen, expr::FunctionAST)::LLVM.Value
 
     empty!(cg.namedvalues)
     for (i, param) in enumerate(LLVM.parameters(the_function))
-        cg.namedvalues[expr.proto.args[i]] = param
+        argname = expr.proto.args[i]
+        alloc = create_entry_block_allocation(the_function, argname)
+        LLVM.store!(cg.builder, param, alloc)
+        cg.namedvalues[argname] = alloc
     end
 
     body = codegen(cg, expr.body)
@@ -183,10 +214,15 @@ function codegen(cg::CodeGen, expr::IfExprAST)
 end
 
 function codegen(cg::CodeGen, expr::ForExprAST)
-    start = codegen(cg, expr.start)
-
     startblock = position(cg.builder)
     func = LLVM.parent(startblock)
+
+    alloc = create_entry_block_allocation(func, expr.varname)
+
+    start = codegen(cg, expr.start)
+
+    LLVM.store!(cg.builder, start, alloc)
+
     loopblock = LLVM.BasicBlock(func, "loop")
 
     LLVM.br!(cg.builder, loopblock)
@@ -207,9 +243,11 @@ function codegen(cg::CodeGen, expr::ForExprAST)
 
     step = codegen(cg, expr.step)
 
-    nextvar = LLVM.fadd!(cg.builder, variable, step, "nextvar")
-
     endd = codegen(cg, expr.endd)
+
+    curvar = load!(cg.builder, expr.varname)
+    nextvar = LLVM.fadd!(cg.builder, curvar, step, "nextvar")
+    LLVM.store!(cg.builder, nextvar, alloc)
 
     endd = LLVM.fcmp!(cg.builder, LLVM.API.LLVMRealONE, endd,
         LLVM.ConstantFP(LLVM.DoubleType(), 1.0))
@@ -229,4 +267,26 @@ function codegen(cg::CodeGen, expr::ForExprAST)
     end
 
     return LLVM.ConstantFP(LLVM.DoubleType(), 0.0)
+end
+
+function codegen(cg::CodeGen, expr::VarExprAST)
+    old_bindings = LLVM.AllocaInst[]
+    func = LLVM.parent(LLVM.position(cg.builder))
+    for (varname, init) in expr.varnames
+        initval = codegen(cg, init)
+        alloca = create_entry_block_allocation(func, varname)
+        LLVM.store!(cg.builder, initval, alloca)
+        if haskey(cg.namedvalues, varname)
+            push!(old_bindings, cg.namedvalues[varname])
+        end
+        @show varname
+        cg.namedvalues[varname] = alloca
+    end
+    body = codegen(cg, expr.body)
+    for i in 1:length(old_bindings)
+        cg.namedvalues[first(expr.varnames[i])] = old_bindings[i]
+    end
+
+    return body
+
 end

@@ -13,6 +13,7 @@ next_token!(ps::Parser) = return (ps.current_token = gettok(ps.l))
 
 # Operator precedence
 const BinopPrecedence = Dict{Kinds.Kind, Int}()
+BinopPrecedence[Kinds.EQUAL]    = 2
 BinopPrecedence[Kinds.LESS]    = 10
 BinopPrecedence[Kinds.GREATER] = 10
 BinopPrecedence[Kinds.PLUS]    = 20
@@ -65,6 +66,15 @@ struct ForExprAST <: ExprAST
     endd::ExprAST
     step::ExprAST
     body::ExprAST
+end
+
+struct VarExprAST <: ExprAST
+    varnames::Vector{Tuple{String, ExprAST}}
+    body::ExprAST
+end
+
+struct BlockExprAST <: ExprAST
+    exprs::Vector{ExprAST}
 end
 
 struct PrototypeAST
@@ -167,7 +177,7 @@ end
 function ParseParenExpr(ps::Parser)::ExprAST
     next_token!(ps) # eat '('
     V = ParseExpression(ps)
-    if current_token(ps).kind != Kinds.RPAREN
+    if current_token(ps).kind != Kinds.RPAR
         error("expected ')'")
     end
     next_token!(ps) # eat ')'
@@ -239,6 +249,41 @@ function ParseExtern(ps)::PrototypeAST
     return ParsePrototype(ps)
 end
 
+function ParseVarExpr(ps)
+    next_token!(ps) #eat the var
+    varnames = Tuple{String, ExprAST}[]
+    if current_token(ps).kind != Kinds.IDENTIFIER
+        error("expected identifier after var")
+    end
+
+    while true
+        name = current_token(ps).val
+        next_token!(ps) # eat the identifier
+        # TODO: Optional initializer
+        if current_token(ps).kind != Kinds.EQUAL
+            error("expected equal after var identifier")
+        end
+        next_token!(ps) # eat the '='
+        init = ParseExpression(ps)
+
+        push!(varnames, (name, init))
+
+        current_token(ps).kind != Kinds.COMMA && break
+        next_token!(ps) # eat the '.'
+        if current_token.kind != Kinds.IDENTIFIER
+            error("expected identifier list after var")
+        end
+    end
+
+    if current_token(ps).kind != Kinds.IN
+        error("exepcted 'in' keyword after 'var'")
+    end
+    next_token!(ps) # eat the in
+
+    body = ParseExpression(ps)
+    return VarExprAST(varnames, body)
+end
+
 function ParseTopLevelExpr(ps)::FunctionAST
     E = ParseExpression(ps)
     proto = PrototypeAST("__anon_expr", String[])
@@ -249,6 +294,18 @@ end
 @noinline function ParseExpression(ps)::ExprAST
     LHS = ParsePrimary(ps)
     return ParseBinOpRHS(ps, 0, LHS)
+end
+
+function ParseBlockExpr(ps)::BlockExprAST
+    next_token!(ps) # eat the '{'
+    exprs = ExprAST[]
+    while true
+        if current_token(ps).kind == Kinds.RBRACE
+            break
+        end
+        push!(exprs, ParseExpression(ps))
+    end
+    return BlockExprAST(exprs)
 end
 
 function ParsePrimary(ps)::ExprAST
@@ -263,6 +320,10 @@ function ParsePrimary(ps)::ExprAST
         return ParseIfExpr(ps)
     elseif curtok.kind == Kinds.FOR
         return ParseForExpr(ps)
+    elseif curtok.kind == Kinds.VAR
+        return ParseVarExpr(ps)
+    elseif curtok.kind == Kinds.LBRACE
+        return ParseBlockExpr(ps)
     else
         error("unknown token: $curtok")
     end

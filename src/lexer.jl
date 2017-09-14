@@ -15,6 +15,7 @@ module Kinds
         ELSE,
         FOR,
         IN,
+        VAR,
     end_keywords,
     begin_operators,
         PLUS,
@@ -32,6 +33,8 @@ module Kinds
         RPAR,
         SEMICOLON,
         COMMA,
+        LBRACE,
+        RBRACE,
     end_delimiters,
     )
 end
@@ -129,6 +132,8 @@ function _gettok(l::Lexer)::Token
     # delimiters
     elseif c == '('; return Token(Kinds.LPAR)
     elseif c == ')'; return Token(Kinds.RPAR)
+    elseif c == '{'; return Token(Kinds.LBRACE)
+    elseif c == '}'; return Token(Kinds.RBRACE)
     elseif c == ';'; return Token(Kinds.SEMICOLON)
     elseif c == ','; return Token(Kinds.COMMA)
     # comparisons
@@ -140,7 +145,7 @@ function _gettok(l::Lexer)::Token
     elseif c == '-'; return Token(Kinds.MINUS)
     elseif c == '/'; return Token(Kinds.SLASH)
     elseif c == '*'; return Token(Kinds.STAR)
-    else error("failed to handle character $c")
+    else error("failed to handle character $c in lexer")
     end
 end
 
