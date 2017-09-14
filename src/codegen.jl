@@ -2,13 +2,13 @@ mutable struct CodeGen
     context::LLVM.Context
     builder::LLVM.Builder
     jit::LLVM.ExecutionEngine
-    namedvalues::Dict{String, LLVM.AllocaInst}
+    current_scope::CurrentScope
     function_protos::Dict{String, PrototypeAST}
     mod::LLVM.Module
     pass_manager::LLVM.FunctionPassManager
     function CodeGen(context::LLVM.Context, builder::LLVM.Builder, jit::LLVM.ExecutionEngine,
-                     namedvalues::Dict{String, LLVM.AllocaInst}, function_protos::Dict{String, PrototypeAST})
-        new(context, builder, jit, function_protos, namedvalues)
+                     current_scope::CurrentScope, function_protos::Dict{String, PrototypeAST})
+        new(context, builder, jit, current_scope, function_protos)
     end
 end
 
@@ -20,16 +20,24 @@ function CodeGen()
         ctx,
         builder,
         jit,
-        Dict{String, LLVM.AllocaInst}(),
+        CurrentScope(),
         Dict{String, PrototypeAST}(),
     )
 end
 
+current_scope(cg::CodeGen) = cg.current_scope
+
+function new_scope(f, cg::CodeGen)
+    open_scope!(current_scope(cg))
+    f()
+    pop!(current_scope(cg))
+end
 Base.show(io::IO, cg::CodeGen) = print(io, "CodeGen")
 
 function initialize_module_and_pass_manager!(cg::CodeGen)
     cg.mod = LLVM.Module("KaleidoscopeModule")
     cg.pass_manager = LLVM.FunctionPassManager(cg.mod)
+    # data layout
     LLVM.instruction_combining!(cg.pass_manager)
     LLVM.reassociate!(cg.pass_manager)
     LLVM.gvn!(cg.pass_manager)
@@ -48,14 +56,14 @@ function get_function(cg::CodeGen, name::String)
         return codegen(cg, cg.function_protos[name])
     end
 
-    error("I guess?")
+    error("encountered undeclared function $name")
 end
 
 function create_entry_block_allocation(fn::LLVM.Function, varname::String)
     local alloc
     LLVM.Builder() do builder
         entry_block = LLVM.entry(fn)
-        LLVM.position!(builder, entry_block)
+        position_before_terminator!(builder, entry_block)
         alloc = LLVM.alloca!(builder, LLVM.DoubleType(), varname)
     end
     return alloc
@@ -67,26 +75,21 @@ end
 
 function codegen(cg::CodeGen, expr::VariableExprAST)::LLVM.Value
     # TODO: Error handling if argument is not found
-    if !haskey(cg.namedvalues, expr.name)
-        error("did not find variable $(expr.name)")
-    end
-    V = cg.namedvalues[expr.name]
+    V = get(current_scope(cg), expr.name, nothing)
+    V == nothing && error("did not find variable $(expr.name)")
     return LLVM.load!(cg.builder, V, expr.name)
 end
 
 function codegen(cg::CodeGen, expr::BinaryExprAST)::LLVM.Value
     if expr.op == Kinds.EQUAL
-        LHS = expr.lhs
-        if !(LHS isa VariableExprAST)
+        var = expr.lhs
+        if !(var isa VariableExprAST)
             error("destination of '=' must be a variable")
         end
         R = codegen(cg, expr.rhs)
-
-        if !haskey(cg.namedvalues, LHS.name)
-            error("unknown variable name $(LHS.name)")
-        end
-
-        LLVM.store!(cg.builder, R, cg.namedvalues[LHS.name])
+        V = get(current_scope(cg), var.name, nothing)
+        V == nothing && error("unknown variable name $(var.name)")
+        LLVM.store!(cg.builder, R, V)
         return R
     end
     L = codegen(cg, expr.lhs)
@@ -152,31 +155,32 @@ end
 
 function codegen(cg::CodeGen, expr::FunctionAST)::LLVM.Value
     cg.function_protos[expr.proto.name] = expr.proto
-
     the_function = get_function(cg, expr.proto.name)
-    # TODO: Check that function body is empty?
 
     entry = LLVM.BasicBlock(the_function, "entry")
     LLVM.position!(cg.builder, entry)
 
-    empty!(cg.namedvalues)
     for (i, param) in enumerate(LLVM.parameters(the_function))
         argname = expr.proto.args[i]
         alloc = create_entry_block_allocation(the_function, argname)
         LLVM.store!(cg.builder, param, alloc)
-        cg.namedvalues[argname] = alloc
+        current_scope(cg)[argname] = alloc
     end
 
-    body = codegen(cg, expr.body)
-    # TODO, delete function on error
-    LLVM.ret!(cg.builder, body)
-    @show cg.mod
-    status = convert(Core.Bool, LLVM.API.LLVMVerifyFunction(LLVM.ref(the_function), LLVM.API.LLVMPrintMessageAction))
-    if status
-        throw(LLVM.LLVMException("broken function"))
+    new_scope(cg) do 
+        body = codegen(cg, expr.body)
+        # TODO, delete function on error
+        LLVM.ret!(cg.builder, body)
+        status = convert(Core.Bool, LLVM.API.LLVMVerifyFunction(LLVM.ref(the_function), LLVM.API.LLVMPrintMessageAction))
+        if status
+            throw(LLVM.LLVMException("broken function: $the_function"))
+        end
     end
+    @show the_function
 
     LLVM.run!(cg.pass_manager, the_function)
+
+    @show the_function
 
     return the_function
 end
@@ -187,106 +191,87 @@ function codegen(cg::CodeGen, expr::IfExprAST)
     elsee = LLVM.BasicBlock(func, "else")
     merge = LLVM.BasicBlock(func, "ifcont")
 
-    # if
-    cond = codegen(cg, expr.cond)
-    zero = LLVM.ConstantFP(LLVM.DoubleType(), 0.0)
-    condv = LLVM.fcmp!(cg.builder, LLVM.API.LLVMRealONE, cond, zero, "ifcond")
-    LLVM.br!(cg.builder, condv, then, elsee)
+    local phi
+    new_scope(cg) do
+        # if
+        cond = codegen(cg, expr.cond)
+        zero = LLVM.ConstantFP(LLVM.DoubleType(), 0.0)
+        condv = LLVM.fcmp!(cg.builder, LLVM.API.LLVMRealONE, cond, zero, "ifcond")
+        LLVM.br!(cg.builder, condv, then, elsee)
 
-    # then
-    LLVM.position!(cg.builder, then)
-    thencg = codegen(cg, expr.then)
-    LLVM.br!(cg.builder, merge)
-    then_block = position(cg.builder)
+        # then
+        LLVM.position!(cg.builder, then)
+        thencg = codegen(cg, expr.then)
+        LLVM.br!(cg.builder, merge)
+        then_block = position(cg.builder)
 
-    # else
-    LLVM.position!(cg.builder, elsee)
-    elsecg = codegen(cg, expr.elsee)
-    LLVM.br!(cg.builder, merge)
-    else_block = position(cg.builder)
+        # else
+        LLVM.position!(cg.builder, elsee)
+        elsecg = codegen(cg, expr.elsee)
+        LLVM.br!(cg.builder, merge)
+        else_block = position(cg.builder)
 
-    # merge
-    LLVM.position!(cg.builder, merge)
-    phi = LLVM.phi!(cg.builder, LLVM.DoubleType(), "iftmp")
-    append!(LLVM.incoming(phi), [(thencg, then_block), (elsecg, else_block)])
+        # merge
+        LLVM.position!(cg.builder, merge)
+        phi = LLVM.phi!(cg.builder, LLVM.DoubleType(), "iftmp")
+        append!(LLVM.incoming(phi), [(thencg, then_block), (elsecg, else_block)])
+    end
 
     return phi
 end
 
 function codegen(cg::CodeGen, expr::ForExprAST)
-    startblock = position(cg.builder)
-    func = LLVM.parent(startblock)
 
-    alloc = create_entry_block_allocation(func, expr.varname)
+    new_scope(cg) do
+        startblock = position(cg.builder)
+        func = LLVM.parent(startblock)
+        alloc = create_entry_block_allocation(func, expr.varname)
+        start = codegen(cg, expr.start)
+        LLVM.store!(cg.builder, start, alloc)
+        loopblock = LLVM.BasicBlock(func, "loop")
+        LLVM.br!(cg.builder, loopblock)
+        LLVM.position!(cg.builder, loopblock)
+        current_scope(cg)[expr.varname] = alloc
+        codegen(cg, expr.body)
+        step = codegen(cg, expr.step)
+        endd = codegen(cg, expr.endd)
 
-    start = codegen(cg, expr.start)
+        curvar = LLVM.load!(cg.builder, alloc, expr.varname)
+        nextvar = LLVM.fadd!(cg.builder, curvar, step, "nextvar")
+        LLVM.store!(cg.builder, nextvar, alloc)
 
-    LLVM.store!(cg.builder, start, alloc)
+        endd = LLVM.fcmp!(cg.builder, LLVM.API.LLVMRealONE, endd,
+            LLVM.ConstantFP(LLVM.DoubleType(), 1.0))
 
-    loopblock = LLVM.BasicBlock(func, "loop")
+        loopendblock = position(cg.builder)
+        afterblock = LLVM.BasicBlock(func, "afterloop")
 
-    LLVM.br!(cg.builder, loopblock)
-
-    LLVM.position!(cg.builder, loopblock)
-    variable = LLVM.phi!(cg.builder, LLVM.DoubleType(), expr.varname)
-    push!(LLVM.incoming(variable), (start, startblock))
-
-    # TODO: What if not found...
-    shadowed_var = false
-    if haskey(cg.namedvalues, expr.varname)
-        shadowed_var = true
-        oldval = cg.namedvalues[expr.varname]
+        LLVM.br!(cg.builder, endd, loopblock, afterblock)
+        LLVM.position!(cg.builder, afterblock)
     end
-    cg.namedvalues[expr.varname] = variable
-
-    codegen(cg, expr.body)
-
-    step = codegen(cg, expr.step)
-
-    endd = codegen(cg, expr.endd)
-
-    curvar = load!(cg.builder, expr.varname)
-    nextvar = LLVM.fadd!(cg.builder, curvar, step, "nextvar")
-    LLVM.store!(cg.builder, nextvar, alloc)
-
-    endd = LLVM.fcmp!(cg.builder, LLVM.API.LLVMRealONE, endd,
-        LLVM.ConstantFP(LLVM.DoubleType(), 1.0))
-
-    loopendblock = position(cg.builder)
-    afterblock = LLVM.BasicBlock(func, "afterloop")
-
-    LLVM.br!(cg.builder, endd, loopblock, afterblock)
-
-    LLVM.position!(cg.builder, afterblock)
-    push!(LLVM.incoming(variable), (nextvar, loopendblock))
-
-    if shadowed_var
-        cg.namedvalues[expr.varname] = oldval
-    else
-        delete!(cg.namedvalues, expr.varname)
-    end
-
+    
     return LLVM.ConstantFP(LLVM.DoubleType(), 0.0)
 end
 
 function codegen(cg::CodeGen, expr::VarExprAST)
-    old_bindings = LLVM.AllocaInst[]
     func = LLVM.parent(LLVM.position(cg.builder))
+    local initval
     for (varname, init) in expr.varnames
         initval = codegen(cg, init)
         alloca = create_entry_block_allocation(func, varname)
         LLVM.store!(cg.builder, initval, alloca)
-        if haskey(cg.namedvalues, varname)
-            push!(old_bindings, cg.namedvalues[varname])
+        current_scope(cg)[varname] = alloca
+    end
+    return initval
+end
+
+function codegen(cg::CodeGen, expr::BlockExprAST)
+    local v
+    # what about empty blocks?
+    new_scope(cg) do
+        for expr in expr.exprs
+            v = codegen(cg, expr)
         end
-        @show varname
-        cg.namedvalues[varname] = alloca
     end
-    body = codegen(cg, expr.body)
-    for i in 1:length(old_bindings)
-        cg.namedvalues[first(expr.varnames[i])] = old_bindings[i]
-    end
-
-    return body
-
+    return v
 end

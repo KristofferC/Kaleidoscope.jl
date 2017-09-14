@@ -13,7 +13,7 @@ next_token!(ps::Parser) = return (ps.current_token = gettok(ps.l))
 
 # Operator precedence
 const BinopPrecedence = Dict{Kinds.Kind, Int}()
-BinopPrecedence[Kinds.EQUAL]    = 2
+BinopPrecedence[Kinds.EQUAL]   = 2
 BinopPrecedence[Kinds.LESS]    = 10
 BinopPrecedence[Kinds.GREATER] = 10
 BinopPrecedence[Kinds.PLUS]    = 20
@@ -70,7 +70,6 @@ end
 
 struct VarExprAST <: ExprAST
     varnames::Vector{Tuple{String, ExprAST}}
-    body::ExprAST
 end
 
 struct BlockExprAST <: ExprAST
@@ -94,44 +93,51 @@ end
 
 function ParseNumberExpr(ps::Parser)::NumberExprAST
     result = NumberExprAST(Base.parse(Float64, current_token(ps).val))
-    next_token!(ps)
+    @show next_token!(ps)
     return result
 end
 
 function ParseIdentifierExpr(ps::Parser)::Union{ VariableExprAST, CallExprAST}
     idname = current_token(ps).val
-    
-    next_token!(ps)
+    next_token!(ps) # eat the idname
+
     if current_token(ps).kind != Kinds.LPAR
         return VariableExprAST(idname)
     end
 
     next_token!(ps) # eat '('
     args = ExprAST[]
+    first = true
     while true
-        push!(args, ParseExpression(ps))
         if current_token(ps).kind == Kinds.RPAR
             break
         end
-        if current_token(ps).kind != Kinds.COMMA
-            error("Expected ')' or ',' in argument list")
+        if !first
+            if current_token(ps).kind != Kinds.COMMA
+                error("Expected ')' or ',' in argument list, got $(current_token(ps))")
+            end
+            next_token!(ps) # eat the ','            
         end
-        next_token!(ps) # eat the ','
+        first = false
+        push!(args, ParseExpression(ps))
     end
     next_token!(ps) # eat ')'
     return CallExprAST(idname, args)
 end
 
 function ParseIfExpr(ps)::IfExprAST
+    # if
     next_token!(ps) # eat 'if'
     cond = ParseExpression(ps)
 
+    # then
     if current_token(ps).kind != Kinds.THEN
         error("expected 'then'")
     end
-    next_token!(ps) # eat then
+    next_token!(ps) # eat 'then'
     then = ParseExpression(ps)
 
+    # else
     if current_token(ps).kind != Kinds.ELSE
         error("expected 'else'")
     end
@@ -143,7 +149,7 @@ end
 
 function ParsePrototype(ps)::PrototypeAST
     if current_token(ps).kind != Kinds.IDENTIFIER
-        error("Expected function name in prototype")
+        error("Expected function name in prototype, got $(current_token(ps))")
     end
 
     func_name = current_token(ps).val
@@ -270,18 +276,13 @@ function ParseVarExpr(ps)
 
         current_token(ps).kind != Kinds.COMMA && break
         next_token!(ps) # eat the '.'
-        if current_token.kind != Kinds.IDENTIFIER
+        if current_token(ps).kind != Kinds.IDENTIFIER
             error("expected identifier list after var")
         end
     end
 
-    if current_token(ps).kind != Kinds.IN
-        error("exepcted 'in' keyword after 'var'")
-    end
-    next_token!(ps) # eat the in
 
-    body = ParseExpression(ps)
-    return VarExprAST(varnames, body)
+    return VarExprAST(varnames)
 end
 
 function ParseTopLevelExpr(ps)::FunctionAST
@@ -301,6 +302,9 @@ function ParseBlockExpr(ps)::BlockExprAST
     exprs = ExprAST[]
     while true
         if current_token(ps).kind == Kinds.RBRACE
+            @show current_token(ps)
+            next_token!(ps) # eat the '}'
+            @show current_token(ps)
             break
         end
         push!(exprs, ParseExpression(ps))
@@ -323,8 +327,9 @@ function ParsePrimary(ps)::ExprAST
     elseif curtok.kind == Kinds.VAR
         return ParseVarExpr(ps)
     elseif curtok.kind == Kinds.LBRACE
+        println("Parsed block expr")
         return ParseBlockExpr(ps)
     else
-        error("unknown token: $curtok")
+        error("unexpected token: $curtok")
     end
 end
