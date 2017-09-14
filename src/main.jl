@@ -79,3 +79,32 @@ function emit_objectfile(str::String, path::String)
         LLVM.emit(tm, cg.mod, LLVM.API.LLVMObjectFile, path)
     end
 end
+
+str = """
+def fib(x) {
+    if (x < 3) then
+        1
+    else
+        fib(x-1)+fib(x-2)
+}
+
+fib(10)
+"""
+
+Kaleidoscope.generate_ir(str)
+
+str = """
+def fib(x) {
+    var a = 1, b = 1
+    for i = 3, i < x, 1.0 in {
+        var c = a + b
+        a = b
+        b = c
+    }
+    b
+}
+
+fib(10)
+"""
+
+Kaleidoscope.generate_ir(str)

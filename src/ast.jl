@@ -93,7 +93,6 @@ end
 
 function ParseNumberExpr(ps::Parser)::NumberExprAST
     result = NumberExprAST(Base.parse(Float64, current_token(ps).val))
-    @show next_token!(ps)
     return result
 end
 
@@ -302,9 +301,7 @@ function ParseBlockExpr(ps)::BlockExprAST
     exprs = ExprAST[]
     while true
         if current_token(ps).kind == Kinds.RBRACE
-            @show current_token(ps)
             next_token!(ps) # eat the '}'
-            @show current_token(ps)
             break
         end
         push!(exprs, ParseExpression(ps))
@@ -327,7 +324,6 @@ function ParsePrimary(ps)::ExprAST
     elseif curtok.kind == Kinds.VAR
         return ParseVarExpr(ps)
     elseif curtok.kind == Kinds.LBRACE
-        println("Parsed block expr")
         return ParseBlockExpr(ps)
     else
         error("unexpected token: $curtok")

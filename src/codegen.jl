@@ -176,12 +176,7 @@ function codegen(cg::CodeGen, expr::FunctionAST)::LLVM.Value
             throw(LLVM.LLVMException("broken function: $the_function"))
         end
     end
-    @show the_function
-
     LLVM.run!(cg.pass_manager, the_function)
-
-    @show the_function
-
     return the_function
 end
 
